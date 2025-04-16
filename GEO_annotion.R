@@ -1,0 +1,159 @@
+remove(list = ls())
+library(GEOquery)
+library(dplyr)
+library(tibble)
+library(data.table)
+library(pheatmap)
+library(ggplot2)
+
+# 设定路径
+dir <- "/Users/yanyucheng/Desktop/生信辅修/第二学期/生物医学网络资源/第三节课"
+setwd(dir)
+
+# 读取数据
+eSet <- getGEO("GSE39582", destdir = dir, getGPL = F)
+## 读取样本-探针数据
+exprSet <- exprs(eSet[[1]])
+exprSet <- as.data.frame(exprSet)
+## 获取探针注释信息
+### 从包含ID的行开始读取
+suppressWarnings({ Anno <- data.table::fread("GSE39582_family.soft.gz",skip = "ID",header = T)})
+colnames(Anno)
+ids <- Anno[,c("ID","Gene Symbol")]
+
+# 注释探针信息
+exp = function(exprSet,ids){
+  exprSet2 <- exprSet %>%
+    rownames_to_column("ID") %>% 
+    inner_join(ids, by = "ID") %>% 
+    dplyr::select(`Gene Symbol`, everything(), -ID)
+
+  table(duplicated(exprSet2$`Gene Symbol`))
+  exprSet3 <- exprSet2 %>% 
+    mutate(newcol= rowMeans(.[,-1])) %>% 
+    arrange(desc(newcol)) %>% 
+    distinct(`Gene Symbol`, .keep_all = T) %>% 
+    column_to_rownames("Gene Symbol") %>% 
+    dplyr::select(-newcol) 
+  return(exprSet3)
+}
+
+exprSet_Anno <- exp(exprSet,ids)
+
+length(unique(rownames(exprSet_Anno)))
+range(exprSet_Anno) 
+
+# 判断是否需要标准化
+log2C = function(ex){
+  qx <- as.numeric(quantile(ex, c(0., 0.25, 0.5, 0.75, 0.99, 1.0), na.rm=T))
+  LogC <- (qx[5] > 100) ||
+    (qx[6]-qx[1] > 50 && qx[2] > 0) ||
+    (qx[2] > 0 && qx[2] < 1 && qx[4] > 1 && qx[4] < 2)
+  if (LogC) {
+    ex[ex <= 0] <- NaN
+    exprSet <- log2(ex)
+    print("log2 transform finished")
+  }else{
+    print("log2 transform not needed")
+  }
+
+  return(ex)
+}
+ex <- log2C(exprSet_Anno)
+
+# 进行分组
+phe <- pData(eSet[[1]])
+## 严格比较两个向量的内容是否完全相同，若不一致，调整表达矩阵顺序，为满足建立数据框“group_df”
+p = identical(rownames(phe),colnames(exprSet_Anno));p
+if(!p) exprSet_Anno = exprSet_Anno[,match(rownames(phe),colnames(exprSet_Anno))]
+# 按照条件进行分组
+table(phe$source_name_ch1)
+group_list <- case_when( 
+  phe$source_name_ch1 == "Frozen tissue of non tumoral colorectal mucosa" ~ 0, TRUE ~ 1
+)
+table(group_list)
+group_df <- data.frame(sample = colnames(exprSet_Anno),
+                         status = c(group_list))
+
+# 归一化
+library(limma)
+data <- exprSet_Anno
+colnames(data) <- group_list
+boxplot(data,outline=FALSE, notch=T,col= as.factor(group_list), las=2)
+
+exprSet_Anno <- normalizeBetweenArrays(exprSet_Anno)
+boxplot(exprSet_Anno,outline=FALSE, notch=T,col= as.factor(group_list), las=2)
+
+# 差异基因分析
+group_df1 <- group_df %>%
+  mutate(status = case_when(
+    status == 0 ~ "Normal",
+    status == 1 ~ "Tumor",
+    TRUE ~ as.character(status)  
+  ))
+
+group_df2 <- group_df1$status
+design <- model.matrix(~0+factor(group_df2))
+colnames(design) = levels(factor(group_df2))
+rownames(design) = colnames(exprSet_Anno)
+
+contrast.martrix <- makeContrasts(Tumor-Normal,levels = design)
+
+deg = function(exprSet,design,contrast.martrix){
+  
+  fit <- lmFit(exprSet,design)
+  fit2 <- contrasts.fit(fit,contrast.martrix)
+  fit2 <- eBayes(fit2)
+  
+  tempOutput = topTable(fit2 , coef = 1,n = Inf)
+  nrDEG = na.omit(tempOutput)
+  
+  return(nrDEG)
+}
+nrDEG <-  deg(exprSet_Anno,design,contrast.martrix)
+
+diffgene <- nrDEG %>%
+   filter(adj.P.Val < 0.05) %>%
+   filter(abs(logFC) >1)
+diffgene$change <- ifelse(diffgene$adj.P.Val < 0.05 & diffgene$logFC > 1, "UP",
+                           ifelse(diffgene$adj.P.Val < 0.05 & diffgene$logFC < -1, "down", "NOT sign"))
+table(diffgene$change)
+save(nrDEG,diffgene,file = "Diff.rdata")
+
+
+#绘制热图
+choose_gene = head(row.names(nrDEG),20)
+choose_martrix = exprSet_Anno[choose_gene,]
+choose_martrix = t(scale(t(choose_martrix)))
+pheatmap(choose_martrix)
+
+#volcano plot
+significant_level <- 0.05                                                                                                                           
+fc_threshold <- 1                                                                           
+
+results_with_groups <- nrDEG %>%                                                      
+  mutate(Significance = ifelse(abs(logFC) > fc_threshold & adj.P.Val < significant_level, 
+                               ifelse(logFC > 0, "Up", "Down"), "None"))
+
+up_genes_count <- sum(results_with_groups$Significance == "Up")
+down_genes_count <- sum(results_with_groups$Significance == "Down")
+
+legend_labels <- c(
+  paste("Up (n =", up_genes_count, ")"),
+  "None",
+  paste("Down (n =", down_genes_count, ")")
+)
+
+volcano_plot <- ggplot(results_with_groups, aes(x = logFC, y = -log10(P.Value), color = Significance)) + 
+  geom_point(alpha = 0.5, size = 2) +                                                                     
+  scale_color_manual(values = c("Down" = "#ADD8E6", "None" = "grey", "Up" = "#FFA07A"), labels = legend_labels) +                 
+  geom_vline(xintercept = c(-fc_threshold, fc_threshold), linetype = "dashed") +                         
+  geom_hline(yintercept = -log10(significant_level), linetype = "dashed") +                             
+  labs(title = paste("Volcano Plot (logFC threshold =", fc_threshold, ", p-value threshold =", significant_level, ")"),
+       x = expression(log[2]~Fold~Change),
+       y = expression(-log[10]~(P-value))) +                                                             
+  theme_bw() +                                                                                           
+  theme(text = element_text(size = 12))                                                                
+guides(color = guide_legend(title = "Gene Significance"))
+
+print(volcano_plot)
