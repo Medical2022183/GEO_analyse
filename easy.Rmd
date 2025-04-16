@@ -1,0 +1,503 @@
+---
+title: "基因表达及多组学数据"
+author: "白日梦艺术家"
+date: "`r Sys.Date()`"
+output: html_document
+---
+```{r, include = FALSE}
+knitr::opts_chunk$set(prompt = T, results='hold', warning=FALSE, message=FALSE)
+```
+
+# 基因表达及多组学数据
+
+## 清空环境，加载必要的包
+```{r}
+remove(list = ls())
+library(GEOquery)
+library(dplyr)
+library(tibble)
+```
+
+## 读取下载的表达谱文件
+
+- 用`GEOquery`中的函数`getGEO()`
+
+```{r}
+eSet <- getGEO("GSE39582", destdir = "/Users/yanyucheng/Desktop/生信辅修/第二学期/生物医学网络资源/第三节课", getGPL = F)
+```
+- 先让我们看看`eSet`里有什么数据
+
+```{r}
+print(eSet)
+Expr <- as.data.frame(eSet[["GSE39582_series_matrix.txt.gz"]]@assayData[["exprs"]])
+head(Expr[,1:3])
+Samp <- as.data.frame(eSet[["GSE39582_series_matrix.txt.gz"]]@phenoData@data)
+head(Samp[,9:11])
+#library(data.table)
+#fwrite(Samp,"/Users/yanyucheng/Desktop/生信辅修/第二学期/生物医学网络资源/第三节课/GSE39582_Sample.tsv")
+# table(Samp$source_name_ch1)
+# table(Samp$characteristics_ch1.1)
+# table(Samp$characteristics_ch1.4)
+```
+- 发现表达矩阵存储在`eSet[["GSE39582_series_matrix.txt.gz"]]@assayData[["exprs"]``这里
+
+- 发现样本信息训处在`eSet[["GSE39582_series_matrix.txt.gz"]]@phenoData@data`这里
+
+- 那么样本信息包含哪些内容捏？？？
+
+  - `Samp$source_name_ch1`存储了样本的种类信息，用他来区别是否为患癌的样本
+  
+    可以发现，这组样本分为*正常组织 (非肿瘤结直肠黏膜)*和*肿瘤组织 (原发结直肠腺癌)*
+  
+  - `Samp$characteristics_ch1.1`也存储样本分类信息
+  
+    可以发现，这里把肿瘤组织分为*发现队列*和*验证队列*
+    
+    <details>
+      <summary><b>发现队列</b>和<b>验证队列</b>的区别与应用</b></summary>
+      
+      发现队列是用于初步筛选生物标志物或建立预测模型的样本组，通常样本量较大且允许存在假阳性结果，侧重于探索性分析；验证队列则是用于独立验证发现队列结果的样本组，强调严格统计检验和结果的可重复性，确保研究结论的可靠性。两者结合形成"假设生成-验证"的研究闭环，是提高生物医学研究可信度的黄金标准。例如在GSE39582数据中，443个肿瘤样本作为发现队列用于差异基因分析，123个肿瘤样本作为验证队列确认基因表达模式的稳定性。
+      
+    </details>
+
+  - `Samp$characteristics_ch1.4`存储分期数据，0，1，2，3，4（转移），N/A（数据缺失）
+  
+  - etc.
+  
+```{r}
+table_list <- lapply(Samp, function(x) {
+  tbl <- table(x)
+  paste(names(tbl), ":", tbl, collapse = "; ")
+})
+
+result_df <- data.frame(
+  Column = names(table_list),
+  Table_Result = unlist(table_list),
+  stringsAsFactors = FALSE
+)
+```
+
+<details>
+  <summary><b>chatgpt</b></summary>
+
+  每一列（行）含义说明：
+
+1. title
+  
+- 样本在 GEO 数据库中的名称或标签（如 CIT001、CIT002 等）。
+	  
+- 通常用于区分不同实验组或来源。
+
+2. geo_accession
+  
+- GEO 样本编号（如 GSM1681353），是每个样本在 GEO 中的唯一标识符。
+
+3. status
+  
+- 样本数据的公开状态，比如：
+	  
+- Public on May 12 2015 表示数据在这一天公开。
+
+4. submission_date
+  
+- 数据提交到 GEO 的时间，比如：
+	  
+- Jul 23 2012 表示样本是在这天提交的。
+
+5. last_update_date
+  
+- 样本信息最后一次更新的时间。
+
+6. type
+  
+- 样本类型，通常为：
+  	
+- RNA：说明数据来自 RNA 分析（如表达谱芯片、RNA-seq）。
+
+7. source_name_ch1
+  
+- 样本来源名称，比如：
+  	
+- fresh frozen primary tumor：表示样本来源于冷冻的原发肿瘤组织。
+
+8. organism_ch1
+  
+- 样本所属的生物种类：
+  	
+- 一般为 Homo sapiens（人类）。
+
+9. characteristics_ch1
+
+- 这些是样本的具体属性描述，分为多个子项，每一个都是以 characteristics_ch1. 开头：
+
+| 列名                  | 含义                          |
+|---------------------|-----------------------------|
+| characteristics_ch1.0 | 样本的 ID 号（如 CIT_number）   |
+| characteristics_ch1.1 | 患者年龄（如 age: 65）          |
+| characteristics_ch1.2 | 性别（如 sex: male/female）     |
+| characteristics_ch1.3 | 肿瘤解剖位置（如 location: distal/proximal） |
+| characteristics_ch1.4 | 肿瘤分期（如 stage: stage II）   |
+| characteristics_ch1.5 | MSI 状态（如 msi: msi/mss，MSI=微卫星不稳定性） |
+| characteristics_ch1.6 | CIMP 状态（CpG island methylator phenotype） |
+| characteristics_ch1.7 | KRAS 基因突变状态（如 kras_mutation: mutated/wt） |
+| characteristics_ch1.8 | BRAF 基因突变状态                |
+| characteristics_ch1.9 | TP53 基因突变状态               |
+| characteristics_ch1.10| 是否复发（relapse）             |
+| characteristics_ch1.11| 死亡状态（death：yes/no）       |
+| characteristics_ch1.12| 随访时间，单位为月（time）      | 
+
+10. description
+  
+-	样本的简要描述，可能和 title 或 source_name 相似。
+
+  ---
+
+这些信息一般用于：
+  
+-	病理分型
+  	
+-	生存分析（如时间 + 死亡/复发）
+  	
+-	分子分型（如 KRAS/BRAF/TP53 突变）
+  	
+-	分组比较（如 proximal vs. distal 位置）
+  	
+ </details>
+
+<details>
+  <summary><b>deepseek</b></summary>
+
+ 基本信息
+ 
+- **样本数量**：共585个样本
+
+- **样本来源**：人类(Homo sapiens)结直肠组织
+
+- **样本类型**：
+
+  - 非肿瘤性结直肠黏膜组织：19例
+  
+  - 原发性结直肠腺癌(discovery组)：443例
+  
+  - 原发性结直肠腺癌(validation组)：123例
+
+ 临床特征
+ 
+- **性别分布**：
+
+  - 女性：263例
+  
+  - 男性：322例
+  
+- **诊断年龄**：范围从22岁到97岁，中老年患者为主
+
+- **TNM分期**：
+
+  - 0期：4例
+  
+  - 1期：38例
+  
+  - 2期：271例
+  
+  - 3期：210例
+  
+  - 4期：60例
+  
+- **肿瘤位置**：
+
+  - 远端：351例
+  
+  - 近端：232例
+
+ 分子特征
+ 
+- **MMR状态**：
+
+  - dMMR(错配修复缺陷)：77例
+  
+  - pMMR(错配修复正常)：459例
+  
+- **CIMP状态**：
+
+  - CIMP阳性(+)：93例
+  
+  - CIMP阴性(-)：420例
+  
+- **CIN状态**：
+
+  - CIN阳性(+)：369例
+  
+  - CIN阴性(-)：112例
+
+ 基因突变信息
+ 
+- **TP53突变**：
+
+  - 突变(M)：190例
+  
+  - 野生型(WT)：161例
+  
+- **KRAS突变**：
+
+  - 突变(M)：217例
+  
+  - 野生型(WT)：328例
+  
+- **BRAF突变**：
+
+  - 突变(M)：51例(主要是V600E突变)
+  
+  - 野生型(WT)：461例
+
+ 治疗信息
+ 
+- **辅助化疗**：
+
+  - 接受化疗(Y)：240例
+  
+  - 未接受化疗(N)：326例
+  
+- **化疗类型**：
+
+  - 5FU：82例
+  
+  - FOLFOX：23例
+  
+  - FOLFIRI：12例
+  
+  - FUFOL：54例
+
+ 预后信息
+ 
+- **无复发生存(RFS)**：
+
+  - 有事件(复发或死亡)：179例
+  
+  - 无事件：395例
+  
+- **总生存(OS)**：
+
+  - 有事件(死亡)：194例
+  
+  - 无事件：385例
+
+ 技术信息
+ 
+- **平台**：Affymetrix Human Genome U133 Plus 2.0 Array (GPL570)
+
+- **RNA提取方法**：多种方法，包括Trizol、Rneasy等
+
+- **数据处理**：RMA标准化 + ComBat批次校正
+
+</details>
+
+## 提取表达矩阵并转换为数据框
+
+```{r}
+exprSet <- exprs(eSet[[1]])
+exprSet <- as.data.frame(exprSet)
+```
+
+### eSet其他信息提取
+
+- 表达矩阵`exprs(eSet[[1]])`
+
+- 样本表型数据`pData(eSet[[1]])` 
+
+- 探针注释数据`fData(eSet[[1]])`
+
+- 实验平台信息`annotation(eSet[[1]])`
+
+- 实验元数据`experimentData(eSet[[1]])`
+
+- 数据处理协议`protocolData(eSet[[1]])`
+
+```{r}
+# 查看对象结构
+show(eSet[[1]])
+
+# 列出所有可访问的组件
+slotNames(eSet[[1]])
+
+# 提取特定数据示例
+expr_matrix <- as.data.frame(exprs(eSet[[1]]))
+sample_info <- as.data.frame(pData(eSet[[1]]))
+annotation(eSet[[1]])
+```
+### 基因探针注释
+
+#### 方法一，使用包idmap1（**不推荐，因为作者说不更新**)
+
+```{r}
+library(idmap1)
+ids <- getIDs('gpl570')
+colnames(ids)
+colnames(ids) <- c("ID","symbol","gpl")
+ids <- ids[,!colnames(ids) %in% "gpl"]
+exprSet2 <- exprSet %>%
+  rownames_to_column("ID") %>% ##将exprSet 的行名（探针ID）转换为数据框中的单独一列
+  inner_join(ids, by = "ID") %>% ##将exprSet与ids（包含 ID 和 symbol 的映射表）合并，合并后的数据框新增 "symbol" 列
+  dplyr::select(symbol, everything(), -ID)
+```
+
+#### 方法二，手动注释（**网络要求高，不推荐**）
+
+```{r}
+#library(GEOquery)
+#gpl <- getGEO(annotation(eSet[[1]])) # 替换为您的GPL编号
+#annot <- Table(gpl)
+```
+
+#### 方法三，下载soft文件并读取
+
+```{r}
+Anno <- data.table::fread("/Users/yanyucheng/Desktop/生信辅修/第二学期/生物医学网络资源/第三节课/GSE39582_family.soft.gz",
+                          skip = "ID",#从包含ID的行开始读取
+                          header = T)
+ids1 <- Anno[,c("ID","Gene Symbol")]
+exprSet2 <- exprSet %>%
+  rownames_to_column("ID") %>% ##将exprSet 的行名（探针ID）转换为数据框中的单独一列
+  inner_join(ids1, by = "ID") %>% ##将exprSet与ids（包含 ID 和 symbol 的映射表）合并，合并后的数据框新增 "symbol" 列
+  dplyr::select(`Gene Symbol`, everything(), -ID)
+```
+- 看到这个`warning`了吗，他不重要，代表了我们只读取了注释文件，没有读取元数据，这恰恰是我们所需要的😂
+
+## 去重
+
+- 获得了初步表达谱后后，由于某些探针获得的基因是重复的我们需要参照最大表达量去重
+
+```{r}
+table(duplicated(exprSet2$`Gene Symbol`))
+exprSet3 <- exprSet2 %>% 
+  mutate(newcol= rowMeans(.[,-1])) %>% 
+  ##为每行（每个基因）添加新列 newcol，计算该基因在所有样本中的平均表达量,.[,-1] 排除第一列（基因符号列），只计算数值列（表达量）
+  arrange(desc(newcol)) %>% 
+  ##按 newcol（平均表达量）降序排列所有行
+  distinct(`Gene Symbol`, .keep_all = T) %>% 
+  ##根据 symbol（基因符号）去重，保留每个基因的第一条记录
+  column_to_rownames("Gene Symbol") %>% 
+  ##将 symbol 列转为行名
+  dplyr::select(-newcol) 
+  ##删除临时列 newcol
+length(unique(rownames(exprSet3)))
+range(exprSet3) 
+#获得最低表达量和最高表达量
+```
+
+- Tips:`duplicated()`：返回一个逻辑向量，标记哪些基因名是重复的（`TRUE` = 重复，`FALSE` = 唯一）。
+
+## 判断是否需要log2转换（**标准化**）
+
+```{r}
+ex <- exprSet3
+qx <- as.numeric(quantile(ex, c(0., 0.25, 0.5, 0.75, 0.99, 1.0), na.rm=T))
+##计算6个关键分位数：最小值（0%）下四分位数（25%）中位数（50%）上四分位数（75%）99%分位数 最大值（100%）
+LogC <- (qx[5] > 100) ||
+  # 条件1：99%分位数 > 100
+  (qx[6]-qx[1] > 50 && qx[2] > 0) ||
+  # 条件2：数据跨度 > 50 且 下四分位数 > 0
+  (qx[2] > 0 && qx[2] < 1 && qx[4] > 1 && qx[4] < 2)
+  #条件3：疑似未转换数据（集中在0-2之间的特定分布）
+if (LogC) {
+  ex[ex <= 0] <- NaN
+  exprSet <- log2(ex)
+  print("log2 transform finished")
+}else{
+    print("log2 transform not needed")
+}
+```
+
+## 分组
+
+```{r}
+#####进行分组
+phe <- pData(eSet[[1]])
+##提取样本的表型数据
+p = identical(rownames(phe),colnames(exprSet3));p
+##严格比较两个向量的内容是否完全相同，若不一致，调整表达矩阵顺序，为满足建立数据框“group_df”
+if(!p) exprSet3 = exprSet3[,match(rownames(phe),colnames(exprSet3))]
+#按照条件进行分组
+table(phe$source_name_ch1)
+group_list <- case_when( 
+  phe$source_name_ch1 == "Frozen tissue of non tumoral colorectal mucosa" ~ "Normal", TRUE ~ "Tumor"
+  )
+table(group_list)
+group_df <- data.frame(sample = colnames(exprSet3),
+                       group_list = group_list)
+```
+
+## 表达数据归一化，可视化处理
+
+- 检查数据分布是否一致（如不同组间表达量范围是否可比）。
+
+- `normalizeBetweenArrays()`：`limma`包函数，对表达矩阵进行分位数归一化（Quantile Normalization），使所有样本的分布一致。适用于微阵列数据，消除技术批次效应。
+
+- RNA-seq数据，通常使用其他方法？？？
+
+```{r}
+####
+library(limma)
+data <- exprSet3
+colnames(data) <- group_list
+boxplot(data,outline=FALSE, notch=T,col= as.factor(group_list), las=2)  
+
+exprSet3 <- normalizeBetweenArrays(exprSet3)
+boxplot(exprSet3,outline=FALSE, notch=T,col= as.factor(group_list), las=2)
+save(exprSet3,group_df,phe, file = "/Users/yanyucheng/Desktop/生信辅修/第二学期/生物医学网络资源/第三节课/exprSet_group.rdata")
+
+options(stringsAsFactors = F)
+group_list <- group_df$group_list
+```
+
+## 基因表达数据分析 
+
+```{r}
+#需要三个，表达矩阵，分组矩阵，差异比较矩阵
+group <- factor(group_list, levels = c("Normal", "Tumor"))
+### 构建比较矩阵
+design <- model.matrix(~group)
+### 比较矩阵命名
+colnames(design) <- levels(group)
+table(design)
+### 2.线性模型拟合
+fit <- lmFit(exprSet3,design) ##用线性模型拟合表达数据
+### 3.贝叶斯检验
+fit2 <- eBayes(fit) ##对线性模型进行经验贝叶斯平滑，提高小样本数据的统计效力。
+### 4.输出差异分析结果,其中coef的数目不能操过design的列数
+### 此处的2代表的是design中第二列和第一列的比较
+allDiff <- topTable(fit2,adjust='fdr',coef=2,number=Inf) ##adjust='fdr'：使用 FDR（False Discovery Rate） 校正 p 值（控制假阳性）。coef=2：比较 design 的第 2 列（Tumor）和第 1 列（Normal），即 Tumor vs Normal。number=Inf：输出所有基因（不限制数量）
+allDiff$gene <- rownames(allDiff)
+head(allDiff)
+```
+
+```{r}
+#根据条件筛选出差异基因
+diffgene <- allDiff %>%
+  filter(adj.P.Val < 0.05) %>%
+  filter(abs(logFC) >1)
+diffgene$change <- ifelse(diffgene$adj.P.Val < 0.05 & diffgene$logFC > 1, "UP",
+                          ifelse(diffgene$adj.P.Val < 0.05 & diffgene$logFC < -1, "down", "NOT sign"))
+table(diffgene$change)
+save(allDiff,diffgene,file = "/Users/yanyucheng/Desktop/生信辅修/第二学期/生物医学网络资源/第三节课/Diff.rdata")
+
+```
+
+```{r}
+library(tidyverse)
+library(ggplot2)
+library(ggpubr)
+exp <- exprSet3[c('CLDN1'),,drop = F] %>%
+  t() %>% as.data.frame()
+exp$sample <- rownames(exp)
+exp$group <- factor(group_list, levels = c("Normal", "Tumor"))
+exp_plot <- gather(exp, key = "gene", value = "Expression", -c(sample, group))
+ggboxplot(exp_plot, x = "gene", y = "Expression", fill = "group", palette = "npg")+
+  stat_compare_means(aes(group = group),
+                     method = "wilcox.test",
+                     label = "p.signif",
+                     symnum.args=list(cutpoints = c(0, 0.001, 0.01, 0.05, 1),
+                                      symbols = c("***", "**", "*", " ")))+
+  theme(text = element_text(size=10),
+        axis.text.x = element_text(angle=45, hjust=1))
+```
+
